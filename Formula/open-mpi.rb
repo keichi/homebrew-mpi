@@ -32,6 +32,8 @@ class OpenMpi < Formula
   conflicts_with "mpich", :because => "both install mpi__ compiler wrappers"
   conflicts_with "lcdf-typetools", :because => "both install same set of binaries."
 
+  patch :p1, :DATA
+
   def install
     ENV.cxx11 if build.cxx11?
 
@@ -100,3 +102,45 @@ class OpenMpi < Formula
     system bin/"mpirun", "-np", "4", "./hellof"
   end
 end
+
+__END__
+diff --git a/ompi/mca/pml/ob1/pml_ob1_isend.c b/ompi/mca/pml/ob1/pml_ob1_isend.c
+index 1e96cdcc78..02114b4db4 100644
+--- a/ompi/mca/pml/ob1/pml_ob1_isend.c
++++ b/ompi/mca/pml/ob1/pml_ob1_isend.c
+@@ -85,6 +85,8 @@ static inline int mca_pml_ob1_send_inline (const void *buf, size_t count,
+     opal_convertor_t convertor;
+     size_t size;
+     int rc;
++    mca_pml_base_send_request_t *sendreq = NULL;
++    mca_pml_base_request_t *base_req = NULL;
+
+     bml_btl = mca_bml_base_btl_array_get_next(&endpoint->btl_eager);
+     if( NULL == bml_btl->btl->btl_sendi)
+@@ -115,10 +117,26 @@ static inline int mca_pml_ob1_send_inline (const void *buf, size_t count,
+
+     ob1_hdr_hton(&match, MCA_PML_OB1_HDR_TYPE_MATCH, dst_proc);
+
++    sendreq = (mca_pml_base_send_request_t*)opal_free_list_wait(&mca_pml_base_send_requests);
++    base_req = &sendreq->req_base;
++    base_req->req_comm = comm;
++    base_req->req_addr = (void *)buf;
++    base_req->req_count = count;
++    base_req->req_datatype = datatype;
++    base_req->req_peer = dst;
++    base_req->req_tag = tag;
++
++    PERUSE_TRACE_COMM_EVENT(PERUSE_COMM_REQ_XFER_BEGIN, base_req, PERUSE_SEND);
++
+     /* try to send immediately */
+     rc = mca_bml_base_sendi (bml_btl, &convertor, &match, OMPI_PML_OB1_MATCH_HDR_LEN,
+                              size, MCA_BTL_NO_ORDER, MCA_BTL_DES_FLAGS_PRIORITY | MCA_BTL_DES_FLAGS_BTL_OWNERSHIP,
+                              MCA_PML_OB1_HDR_TYPE_MATCH, NULL);
++
++    PERUSE_TRACE_COMM_EVENT(PERUSE_COMM_REQ_XFER_END, base_req, PERUSE_SEND);
++
++    opal_free_list_return_mt (&mca_pml_base_send_requests, (opal_free_list_item_t *)sendreq);
++
+     if (count > 0) {
+         opal_convertor_cleanup (&convertor);
+     }
