@@ -11,7 +11,7 @@ class OpenMpi < Formula
   end
 
   head do
-    url "https://github.com/open-mpi/ompi.git", :tag => "3.0.1"
+    url "https://github.com/open-mpi/ompi.git"
     depends_on "automake" => :build
     depends_on "autoconf" => :build
     depends_on "libtool" => :build
