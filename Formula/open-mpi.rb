@@ -1,17 +1,17 @@
 class OpenMpi < Formula
   desc "High performance message passing library"
   homepage "https://www.open-mpi.org/"
-  url "https://www.open-mpi.org/software/ompi/v2.1/downloads/openmpi-2.1.0.tar.bz2"
-  sha256 "b169e15f5af81bf3572db764417670f508c0df37ce86ff50deb56bd3acb43957"
+  url "https://www.open-mpi.org/software/ompi/v3.0/downloads/openmpi-3.0.1.tar.bz2"
+  sha256 "663450d1ee7838b03644507e8a76edfb1fba23e601e9e0b5b2a738e54acd785d"
 
   bottle do
-    sha256 "980dee19a68a35981cebdead7c7d7fa66df9b206481d8759c4738da884eb8952" => :sierra
-    sha256 "0f22b4624cb270647bd806a165b12d907b50dec400707d8c3ead64f7eb07fa94" => :el_capitan
-    sha256 "5ae27358f9df385b8ca9a2480f1ab99caf7a6ea9c8c14cfc118199364e532954" => :yosemite
+    sha256 "0ec480af5e4facf76d8437b3bd095f24ec7e94b9fd0479e58517706a8aefb9a7" => :high_sierra
+    sha256 "a7e3dd3ff80c79a47fe7ef03c51275d1022d6b74aed2214d08bc63713f1df790" => :sierra
+    sha256 "35541c62f4741d3ca520984cc7d38d7a5e6c730b8f9a4e0f75fe5b8e801b0bb1" => :el_capitan
   end
 
   head do
-    url "https://github.com/open-mpi/ompi.git"
+    url "https://github.com/open-mpi/ompi.git", :tag => "3.0.1"
     depends_on "automake" => :build
     depends_on "autoconf" => :build
     depends_on "libtool" => :build
@@ -20,22 +20,25 @@ class OpenMpi < Formula
   option "with-mpi-thread-multiple", "Enable MPI_THREAD_MULTIPLE"
   option "with-cxx-bindings", "Enable C++ MPI bindings (deprecated as of MPI-3.0)"
   option "with-peruse", "Enable MPI performance revealing extension interface (PERUSE)"
-  option :cxx11
+  option "without-fortran", "Do not build the Fortran bindings"
 
   deprecated_option "disable-fortran" => "without-fortran"
   deprecated_option "enable-mpi-thread-multiple" => "with-mpi-thread-multiple"
 
-  depends_on :fortran => :recommended
+  depends_on "gcc" if build.with? "fortran"
   depends_on :java => :optional
   depends_on "libevent"
 
-  conflicts_with "mpich", :because => "both install mpi__ compiler wrappers"
-  conflicts_with "lcdf-typetools", :because => "both install same set of binaries."
+  conflicts_with "mpich", :because => "both install MPI compiler wrappers"
+  conflicts_with "lcdf-typetools", :because => "both install same set of binaries"
 
-  patch :p1, :DATA
+  needs :cxx11
 
   def install
-    ENV.cxx11 if build.cxx11?
+    # otherwise libmpi_usempi_ignore_tkr gets built as a static library
+    ENV["MACOSX_DEPLOYMENT_TARGET"] = MacOS.version
+
+    ENV.cxx11
 
     args = %W[
       --prefix=#{prefix}
@@ -60,13 +63,11 @@ class OpenMpi < Formula
 
     # If Fortran bindings were built, there will be stray `.mod` files
     # (Fortran header) in `lib` that need to be moved to `include`.
-    if build.with? "fortran"
-      include.install Dir["#{lib}/*.mod"]
-    end
+    include.install Dir["#{lib}/*.mod"] if build.with? "fortran"
   end
 
   test do
-    (testpath/"hello.c").write <<-EOS.undent
+    (testpath/"hello.c").write <<~EOS
       #include <mpi.h>
       #include <stdio.h>
 
@@ -85,8 +86,8 @@ class OpenMpi < Formula
     EOS
     system bin/"mpicc", "hello.c", "-o", "hello"
     system "./hello"
-    system bin/"mpirun", "-np", "4", "./hello"
-    (testpath/"hellof.f90").write <<-EOS.undent
+    system bin/"mpirun", "./hello"
+    (testpath/"hellof.f90").write <<~EOS
       program hello
       include 'mpif.h'
       integer rank, size, ierror, tag, status(MPI_STATUS_SIZE)
@@ -99,48 +100,6 @@ class OpenMpi < Formula
     EOS
     system bin/"mpif90", "hellof.f90", "-o", "hellof"
     system "./hellof"
-    system bin/"mpirun", "-np", "4", "./hellof"
+    system bin/"mpirun", "./hellof"
   end
 end
-
-__END__
-diff --git a/ompi/mca/pml/ob1/pml_ob1_isend.c b/ompi/mca/pml/ob1/pml_ob1_isend.c
-index 1e96cdcc78..02114b4db4 100644
---- a/ompi/mca/pml/ob1/pml_ob1_isend.c
-+++ b/ompi/mca/pml/ob1/pml_ob1_isend.c
-@@ -85,6 +85,8 @@ static inline int mca_pml_ob1_send_inline (const void *buf, size_t count,
-     opal_convertor_t convertor;
-     size_t size;
-     int rc;
-+    mca_pml_base_send_request_t *sendreq = NULL;
-+    mca_pml_base_request_t *base_req = NULL;
-
-     bml_btl = mca_bml_base_btl_array_get_next(&endpoint->btl_eager);
-     if( NULL == bml_btl->btl->btl_sendi)
-@@ -115,10 +117,26 @@ static inline int mca_pml_ob1_send_inline (const void *buf, size_t count,
-
-     ob1_hdr_hton(&match, MCA_PML_OB1_HDR_TYPE_MATCH, dst_proc);
-
-+    sendreq = (mca_pml_base_send_request_t*)opal_free_list_wait(&mca_pml_base_send_requests);
-+    base_req = &sendreq->req_base;
-+    base_req->req_comm = comm;
-+    base_req->req_addr = (void *)buf;
-+    base_req->req_count = count;
-+    base_req->req_datatype = datatype;
-+    base_req->req_peer = dst;
-+    base_req->req_tag = tag;
-+
-+    PERUSE_TRACE_COMM_EVENT(PERUSE_COMM_REQ_XFER_BEGIN, base_req, PERUSE_SEND);
-+
-     /* try to send immediately */
-     rc = mca_bml_base_sendi (bml_btl, &convertor, &match, OMPI_PML_OB1_MATCH_HDR_LEN,
-                              size, MCA_BTL_NO_ORDER, MCA_BTL_DES_FLAGS_PRIORITY | MCA_BTL_DES_FLAGS_BTL_OWNERSHIP,
-                              MCA_PML_OB1_HDR_TYPE_MATCH, NULL);
-+
-+    PERUSE_TRACE_COMM_EVENT(PERUSE_COMM_REQ_XFER_END, base_req, PERUSE_SEND);
-+
-+    opal_free_list_return_mt (&mca_pml_base_send_requests, (opal_free_list_item_t *)sendreq);
-+
-     if (count > 0) {
-         opal_convertor_cleanup (&convertor);
-     }
